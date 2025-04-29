@@ -11,30 +11,35 @@ import logging
 import os
 from datetime import datetime, timedelta
 import asyncio
+from typing import Dict, Optional, Any
+
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from dotenv import load_dotenv
+
+from core.interfaces import BrowserInterface, AuthenticationInterface
+from utils.common import retry_async
 
 # Load environment variables
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-class AuthenticationModule:
+
+class AuthenticationModule(AuthenticationInterface):
     """
     Module for handling vAuto authentication.
     """
     
-    def __init__(self, nova_engine, config):
+    def __init__(self, browser: BrowserInterface, config: Dict[str, Any]):
         """
         Initialize the authentication module.
         
         Args:
-            nova_engine (NovaActEngine): Nova Act Engine instance
-            config (dict): System configuration
+            browser: Browser interface implementation
+            config: System configuration
         """
-        self.nova_engine = nova_engine
+        self.browser = browser
         self.config = config
         self.session_valid_until = None
         
@@ -50,12 +55,12 @@ class AuthenticationModule:
         
         logger.info("Authentication module initialized")
     
-    async def login(self, dealership_id=None):
+    async def login(self, dealership_id: Optional[str] = None) -> bool:
         """
         Log in to vAuto.
         
         Args:
-            dealership_id (str, optional): Dealership ID to select after login
+            dealership_id: Dealership ID to select after login
             
         Returns:
             bool: True if login successful, False otherwise
@@ -63,13 +68,18 @@ class AuthenticationModule:
         logger.info("Logging in to vAuto")
         
         try:
-            result = await self.nova_engine.execute_action(
-                lambda browser: self._login_action(browser, dealership_id)
+            # Use retry mechanism for login
+            result = await retry_async(
+                self._login_action,
+                dealership_id,
+                max_retries=3,
+                delay=2,
+                exceptions=(TimeoutException, NoSuchElementException)
             )
             
             if result:
-                # Set session expiration (default to 4 hours)
-                self.session_valid_until = datetime.now() + timedelta(hours=4)
+                # Set session expiration (30 minutes as per requirements)
+                self.session_valid_until = datetime.now() + timedelta(minutes=30)
                 logger.info("Successfully logged in to vAuto")
             else:
                 logger.error("Failed to log in to vAuto")
@@ -80,41 +90,58 @@ class AuthenticationModule:
             logger.error(f"Error logging in to vAuto: {str(e)}")
             return False
     
-    async def _login_action(self, browser, dealership_id):
+    async def _login_action(self, dealership_id: Optional[str] = None) -> bool:
         """
         Internal action to perform login.
         
         Args:
-            browser: Browser instance
-            dealership_id (str, optional): Dealership ID to select after login
+            dealership_id: Dealership ID to select after login
             
         Returns:
             bool: True if login successful, False otherwise
         """
         try:
             # Navigate to login page
-            await self.nova_engine.navigate_to("https://www.vauto.com/login")
+            await self.browser.navigate_to("https://app.vauto.com/login")
             
-            # Wait for the login form to load
-            username_field = await self.nova_engine.wait_for_presence(By.ID, "username")
+            # Wait for the username field to load
+            username_field = await self.browser.wait_for_presence("//input[@id='username']")
             if not username_field:
-                logger.error("Login form not found")
+                logger.error("Username field not found")
                 return False
             
-            # Enter credentials
-            await self.nova_engine.fill_input(By.ID, "username", self.credentials["username"])
-            await self.nova_engine.fill_input(By.ID, "password", self.credentials["password"])
+            # Enter username
+            await self.browser.fill_input("//input[@id='username']", self.credentials["username"])
+            
+            # Click Next button
+            await self.browser.click_element("//button[contains(text(), 'Next')]")
+            
+            # Wait for password field to load
+            password_field = await self.browser.wait_for_presence("//input[@type='password']")
+            if not password_field:
+                logger.error("Password field not found")
+                return False
+            
+            # Enter password
+            await self.browser.fill_input("//input[@type='password']", self.credentials["password"])
             
             # Click login button
-            await self.nova_engine.click_element(By.XPATH, "//button[@type='submit' or contains(@class, 'login')]")
+            await self.browser.click_element("//button[@type='submit']")
+            
+            # Handle 2FA if required
+            if await self._is_2fa_required():
+                logger.info("2FA required, handling OTP")
+                if not await self._handle_2fa():
+                    logger.error("Failed to handle 2FA")
+                    return False
             
             # Wait for login to complete
             dashboard_selector = "//div[contains(@class, 'dashboard') or contains(@class, 'inventory')]"
-            dashboard = await self.nova_engine.wait_for_presence(By.XPATH, dashboard_selector)
+            dashboard = await self.browser.wait_for_presence(dashboard_selector)
             
             if not dashboard:
                 # Check for error messages
-                error_message = await self._check_login_errors(browser)
+                error_message = await self._check_login_errors()
                 if error_message:
                     logger.error(f"Login failed: {error_message}")
                 return False
@@ -129,16 +156,111 @@ class AuthenticationModule:
         except Exception as e:
             logger.error(f"Login action failed: {str(e)}")
             # Take a screenshot for debugging
-            await self.nova_engine.take_screenshot("logs/login_failure.png")
+            await self.browser.take_screenshot("logs/login_failure.png")
             return False
     
-    async def _check_login_errors(self, browser):
+    async def _is_2fa_required(self) -> bool:
+        """
+        Check if 2FA is required.
+        
+        Returns:
+            bool: True if 2FA is required, False otherwise
+        """
+        # Look for OTP input field or 2FA indicators
+        otp_selectors = [
+            "//input[contains(@id, 'otp')]",
+            "//input[contains(@id, '2fa')]",
+            "//div[contains(text(), 'verification code')]",
+            "//div[contains(text(), 'two-factor')]"
+        ]
+        
+        for selector in otp_selectors:
+            element = await self.browser.wait_for_presence(selector, timeout=3)
+            if element:
+                return True
+        
+        return False
+    
+    async def _handle_2fa(self) -> bool:
+        """
+        Handle 2FA verification.
+        
+        Returns:
+            bool: True if 2FA handled successfully, False otherwise
+        """
+        try:
+            # Get OTP from email or Twilio (implementation depends on requirements)
+            otp = await self._get_otp()
+            
+            if not otp:
+                logger.error("Failed to get OTP")
+                return False
+            
+            # Find OTP input field
+            otp_selectors = [
+                "//input[contains(@id, 'otp')]",
+                "//input[contains(@id, '2fa')]",
+                "//input[contains(@placeholder, 'code')]"
+            ]
+            
+            otp_field = None
+            for selector in otp_selectors:
+                field = await self.browser.wait_for_presence(selector)
+                if field:
+                    otp_field = selector
+                    break
+            
+            if not otp_field:
+                logger.error("OTP input field not found")
+                return False
+            
+            # Enter OTP
+            await self.browser.fill_input(otp_field, otp)
+            
+            # Click verify button
+            verify_selectors = [
+                "//button[contains(text(), 'Verify')]",
+                "//button[contains(text(), 'Submit')]",
+                "//button[@type='submit']"
+            ]
+            
+            for selector in verify_selectors:
+                button = await self.browser.wait_for_presence(selector)
+                if button:
+                    await self.browser.click_element(selector)
+                    break
+            
+            # Wait for verification to complete
+            dashboard_selector = "//div[contains(@class, 'dashboard') or contains(@class, 'inventory')]"
+            dashboard = await self.browser.wait_for_presence(dashboard_selector, timeout=10)
+            
+            return dashboard is not None
+            
+        except Exception as e:
+            logger.error(f"Error handling 2FA: {str(e)}")
+            return False
+    
+    async def _get_otp(self) -> str:
+        """
+        Get OTP from email or Twilio.
+        
+        Returns:
+            str: OTP code or empty string if not found
+        """
+        # This is a placeholder implementation
+        # In a real implementation, this would retrieve the OTP from email or Twilio
+        logger.warning("Using mock OTP implementation")
+        
+        # Simulate OTP retrieval delay
+        await asyncio.sleep(2)
+        
+        # Return a mock OTP
+        return "123456"
+    
+    async def _check_login_errors(self) -> Optional[str]:
         """
         Check for login error messages.
         
-        Args:
-            browser: Browser instance
-            
         Returns:
             str: Error message if found, None otherwise
         """
@@ -151,9 +273,9 @@ class AuthenticationModule:
         
         for selector in error_selectors:
             try:
-                elements = await self.nova_engine.find_elements(By.XPATH, selector)
+                elements = await self.browser.find_elements(selector)
                 for element in elements:
-                    text = await self.nova_engine.get_text(element)
+                    text = await self.browser.get_text(element)
                     if text and len(text.strip()) > 0 and "error" in text.lower():
                         return text.strip()
             except:
@@ -161,12 +283,12 @@ class AuthenticationModule:
         
         return None
     
-    async def _select_dealership(self, dealership_id):
+    async def _select_dealership(self, dealership_id: str) -> bool:
         """
         Select a dealership after login.
         
         Args:
-            dealership_id (str): Dealership ID to select
+            dealership_id: Dealership ID to select
             
         Returns:
             bool: True if dealership selected successfully, False otherwise
@@ -175,28 +297,26 @@ class AuthenticationModule:
         
         try:
             # Check if dealership dropdown is present
-            dealer_dropdown = await self.nova_engine.find_element(
-                By.XPATH, 
+            dealer_dropdown = await self.browser.find_element(
                 "//div[contains(@class, 'dealerSelect') or contains(@class, 'dealer-select')]",
                 timeout=5
             )
             
             if dealer_dropdown:
                 # Click the dropdown to show options
-                await self.nova_engine.click_element(dealer_dropdown)
+                await self.browser.click_element(dealer_dropdown)
                 
                 # Wait for dropdown options to appear
                 await asyncio.sleep(1)
                 
                 # Look for the specified dealership
-                dealership_option = await self.nova_engine.find_element(
-                    By.XPATH,
+                dealership_option = await self.browser.find_element(
                     f"//div[contains(text(), '{dealership_id}') or contains(@id, '{dealership_id}')]",
                     timeout=5
                 )
                 
                 if dealership_option:
-                    await self.nova_engine.click_element(dealership_option)
+                    await self.browser.click_element(dealership_option)
                     
                     # Wait for the page to refresh with selected dealership
                     await asyncio.sleep(2)
@@ -215,7 +335,7 @@ class AuthenticationModule:
             logger.error(f"Error selecting dealership: {str(e)}")
             return False
     
-    async def is_logged_in(self):
+    async def is_logged_in(self) -> bool:
         """
         Check if the current session is logged in.
         
@@ -226,26 +346,26 @@ class AuthenticationModule:
             return False
         
         try:
-            result = await self.nova_engine.execute_action(self._check_logged_in_action)
+            result = await retry_async(
+                self._check_logged_in_action,
+                max_retries=2,
+                delay=1
+            )
             return result
         except Exception as e:
             logger.error(f"Error checking login status: {str(e)}")
             return False
     
-    async def _check_logged_in_action(self, browser):
+    async def _check_logged_in_action(self) -> bool:
         """
         Internal action to check if logged in.
         
-        Args:
-            browser: Browser instance
-            
         Returns:
             bool: True if logged in, False otherwise
         """
         try:
             # Check for login page
-            login_elements = await self.nova_engine.find_elements(
-                By.XPATH, 
+            login_elements = await self.browser.find_elements(
                 "//*[@id='username' or contains(@class, 'login')]",
                 timeout=3
             )
@@ -254,8 +374,7 @@ class AuthenticationModule:
                 return False
             
             # Check for elements that indicate we're logged in
-            dashboard_elements = await self.nova_engine.find_elements(
-                By.XPATH,
+            dashboard_elements = await self.browser.find_elements(
                 "//div[contains(@class, 'dashboard') or contains(@class, 'inventory') or contains(@class, 'navbar')]",
                 timeout=3
             )
@@ -266,12 +385,12 @@ class AuthenticationModule:
             logger.warning(f"Check logged in action failed: {str(e)}")
             return False
     
-    async def ensure_logged_in(self, dealership_id=None):
+    async def ensure_logged_in(self, dealership_id: Optional[str] = None) -> bool:
         """
         Ensure the session is logged in, logging in if necessary.
         
         Args:
-            dealership_id (str, optional): Dealership ID to select if login is needed
+            dealership_id: Dealership ID to select if login is needed
             
         Returns:
             bool: True if logged in, False otherwise
@@ -281,7 +400,7 @@ class AuthenticationModule:
         
         return await self.login(dealership_id)
     
-    async def logout(self):
+    async def logout(self) -> bool:
         """
         Log out from vAuto.
         
@@ -291,7 +410,11 @@ class AuthenticationModule:
         logger.info("Logging out from vAuto")
         
         try:
-            result = await self.nova_engine.execute_action(self._logout_action)
+            result = await retry_async(
+                self._logout_action,
+                max_retries=2,
+                delay=1
+            )
             
             if result:
                 self.session_valid_until = None
@@ -305,13 +428,10 @@ class AuthenticationModule:
             logger.error(f"Error logging out from vAuto: {str(e)}")
             return False
     
-    async def _logout_action(self, browser):
+    async def _logout_action(self) -> bool:
         """
         Internal action to perform logout.
         
-        Args:
-            browser: Browser instance
-            
         Returns:
             bool: True if logout successful, False otherwise
         """
@@ -328,7 +448,7 @@ class AuthenticationModule:
             user_menu = None
             for selector in user_menu_selectors:
                 try:
-                    elements = await self.nova_engine.find_elements(By.XPATH, selector, timeout=1)
+                    elements = await self.browser.find_elements(selector, timeout=1)
                     if elements:
                         user_menu = elements[0]
                         break
@@ -349,12 +469,12 @@ class AuthenticationModule:
                 
                 for selector in logout_selectors:
                     try:
-                        logout_button = await self.nova_engine.find_element(By.XPATH, selector, timeout=1)
+                        logout_button = await self.browser.find_element(selector, timeout=1)
                         if logout_button:
-                            await self.nova_engine.click_element(logout_button)
+                            await self.browser.click_element(logout_button)
                             
                             # Wait for login page to appear
-                            login_page = await self.nova_engine.wait_for_presence(By.ID, "username", timeout=5)
+                            login_page = await self.browser.wait_for_presence("//input[@id='username']", timeout=5)
                             return login_page is not None
                     except:
                         continue
@@ -363,7 +483,7 @@ class AuthenticationModule:
                 return False
             
             # Click user menu to open dropdown
-            await self.nova_engine.click_element(user_menu)
+            await self.browser.click_element(user_menu)
             
             # Wait for dropdown to appear
             await asyncio.sleep(1)
@@ -380,12 +500,12 @@ class AuthenticationModule:
             
             for selector in logout_selectors:
                 try:
-                    logout_option = await self.nova_engine.find_element(By.XPATH, selector, timeout=1)
+                    logout_option = await self.browser.find_element(selector, timeout=1)
                     if logout_option:
-                        await self.nova_engine.click_element(logout_option)
+                        await self.browser.click_element(logout_option)
                         
                         # Wait for login page to appear
-                        login_page = await self.nova_engine.wait_for_presence(By.ID, "username", timeout=5)
+                        login_page = await self.browser.wait_for_presence("//input[@id='username']", timeout=5)
                         return login_page is not None
                 except:
                     continue

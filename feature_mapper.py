@@ -2,283 +2,429 @@
 Feature Mapping Module for vAuto Feature Verification System.
 
 Handles:
-- Mapping extracted features to vAuto checkboxes
-- Managing feature mapping database
-- Fuzzy matching for feature recognition
+- Mapping between extracted window sticker features and vAuto checkboxes
+- Fuzzy matching with configurable thresholds
+- Learning mechanism for improving mappings over time
+- Category-based boosting
+- Dealership-specific overrides
 """
 
 import logging
-import os
 import json
-from typing import Dict, List, Optional, Any, Tuple
+import os
 import asyncio
-
-from fuzzywuzzy import fuzz, process
-
-from core.interfaces import FeatureMapperInterface
-from utils.common import normalize_text, load_json_file, save_json_file
+import re
+from datetime import datetime
+from fuzzywuzzy import fuzz
+import importlib
 
 logger = logging.getLogger(__name__)
 
-
-class FeatureMapper(FeatureMapperInterface):
+class FeatureMapper:
     """
-    Module for mapping extracted features to vAuto checkboxes.
+    Module for mapping between extracted features and vAuto checkboxes.
     """
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config):
         """
-        Initialize the feature mapper.
+        Initialize the feature mapping module.
         
         Args:
-            config: System configuration
+            config (dict): System configuration
         """
         self.config = config
+        self.feature_mapping = {}
         self.mapping_file = os.path.join("configs", "feature_mapping.json")
-        self.feature_mapping = self._load_mapping()
         self.confidence_threshold = config["feature_mapping"]["confidence_threshold"]
         
-        logger.info("Feature Mapper initialized")
+        # Load the similarity algorithm based on config
+        similarity_module_path = config["feature_mapping"]["similarity_algorithm"]
+        module_parts = similarity_module_path.split('.')
+        self.similarity_algorithm = getattr(
+            importlib.import_module('.'.join(module_parts[:-1])),
+            module_parts[-1]
+        )
+        
+        # Initialize category boosts
+        self.category_boosts = config.get('category_boosts', {
+            'Convenience': 0.1,
+            'Safety': 0.1,
+            'Technology': 0.05,
+            'Performance': 0.05,
+            'Exterior': 0.05,
+            'Interior': 0.05
+        })
+        
+        # Load dealership overrides
+        self.dealership_overrides = self._load_dealership_overrides()
+        
+        self._load_mapping()
+        
+        logger.info(f"Feature Mapping module initialized with {len(self.feature_mapping)} mappings")
     
-    def _load_mapping(self) -> Dict[str, List[str]]:
+    def _load_mapping(self):
         """
-        Load feature mapping from file.
+        Load feature mappings from file.
+        """
+        try:
+            with open(self.mapping_file, 'r') as f:
+                self.feature_mapping = json.load(f)
+            
+            logger.info(f"Loaded {len(self.feature_mapping)} feature mappings from {self.mapping_file}")
+            
+        except Exception as e:
+            logger.error(f"Error loading feature mappings: {str(e)}")
+            logger.warning("Using empty feature mapping")
+            self.feature_mapping = {}
+    
+    def _load_dealership_overrides(self):
+        """
+        Load dealership-specific overrides from configuration.
         
         Returns:
-            dict: Feature mapping dictionary
+            dict: Dictionary of dealership-specific overrides
         """
-        mapping = load_json_file(self.mapping_file, default={})
+        override_file = self.config.get('dealership_override_file')
+        dealership_id = self.config.get('dealership_id')
         
-        if not mapping:
-            # Create default mapping
-            mapping = self._create_default_mapping()
-            save_json_file(self.mapping_file, mapping)
-            logger.info("Created default feature mapping")
-        else:
-            logger.info(f"Loaded feature mapping with {len(mapping)} entries")
-        
-        return mapping
+        if not override_file or not dealership_id:
+            return {}
+            
+        try:
+            with open(override_file, 'r') as f:
+                all_overrides = json.load(f)
+            
+            # Get overrides for this specific dealership
+            dealership_overrides = all_overrides.get(dealership_id, {})
+            
+            logger.info(f"Loaded {len(dealership_overrides)} dealership-specific overrides")
+            return dealership_overrides
+        except Exception as e:
+            logger.error(f"Failed to load dealership overrides: {str(e)}")
+            return {}
     
-    def _create_default_mapping(self) -> Dict[str, List[str]]:
+    def _save_mapping(self):
         """
-        Create default feature mapping.
+        Save feature mappings to file.
         
         Returns:
-            dict: Default feature mapping dictionary
+            bool: True if save successful, False otherwise
         """
-        # This is a simplified example of feature mapping
-        # In a real implementation, this would be more comprehensive
-        return {
-            "Sunroof": ["sunroof", "moonroof", "panoramic roof", "glass roof"],
-            "Leather Seats": ["leather seats", "leather interior", "leather upholstery"],
-            "Navigation System": ["navigation system", "nav system", "gps navigation", "built-in navigation"],
-            "Bluetooth": ["bluetooth", "bluetooth connectivity", "bluetooth audio"],
-            "Backup Camera": ["backup camera", "rear view camera", "rear camera", "reversing camera"],
-            "Heated Seats": ["heated seats", "heated front seats", "heated rear seats"],
-            "Blind Spot Monitor": ["blind spot monitor", "blind spot detection", "blind spot warning"],
-            "Lane Departure Warning": ["lane departure warning", "lane departure alert", "lane keeping assist"],
-            "Adaptive Cruise Control": ["adaptive cruise control", "dynamic cruise control", "radar cruise control"],
-            "Keyless Entry": ["keyless entry", "remote entry", "smart key"],
-            "Push Button Start": ["push button start", "push start", "keyless start", "remote start"],
-            "Power Liftgate": ["power liftgate", "power tailgate", "hands-free liftgate"],
-            "Third Row Seating": ["third row seating", "3rd row seating", "third row seats", "7 passenger seating"],
-            "All Wheel Drive": ["all wheel drive", "awd", "4wd", "four wheel drive", "4 wheel drive"],
-            "Apple CarPlay": ["apple carplay", "carplay"],
-            "Android Auto": ["android auto"],
-            "Wireless Charging": ["wireless charging", "qi charging", "wireless phone charging"],
-            "Premium Sound System": ["premium sound", "bose sound", "harman kardon", "jbl sound", "premium audio"],
-            "Parking Sensors": ["parking sensors", "park assist", "parking assist", "front parking sensors", "rear parking sensors"],
-            "Collision Warning": ["collision warning", "forward collision warning", "collision alert", "pre-collision system"]
-        }
+        try:
+            with open(self.mapping_file, 'w') as f:
+                json.dump(self.feature_mapping, f, indent=2)
+            
+            logger.info(f"Saved {len(self.feature_mapping)} feature mappings to {self.mapping_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving feature mappings: {str(e)}")
+            return False
     
-    async def map_features(self, extracted_features: List[str]) -> Dict[str, bool]:
+    def normalize_text(self, text):
+        """
+        Normalize text for comparison.
+        
+        Args:
+            text (str): Text to normalize
+            
+        Returns:
+            str: Normalized text
+        """
+        if not text:
+            return ""
+            
+        # Convert to lowercase
+        normalized = text.lower()
+        
+        # Remove special characters
+        normalized = re.sub(r'[^\w\s]', ' ', normalized)
+        
+        # Replace multiple spaces with a single space
+        normalized = re.sub(r'\s+', ' ', normalized)
+        
+        # Strip leading/trailing whitespace
+        normalized = normalized.strip()
+        
+        return normalized
+    
+    def get_category_boost(self, feature_text):
+        """
+        Get category boost based on feature text.
+        
+        Args:
+            feature_text (str): Feature text to check for category indicators
+            
+        Returns:
+            float: Boost value between 0 and 1
+        """
+        normalized_text = self.normalize_text(feature_text)
+        
+        for category, boost in self.category_boosts.items():
+            if category.lower() in normalized_text:
+                logger.debug(f"Applied category boost {boost} for category '{category}'")
+                return boost
+                
+        return 0.0
+    
+    def check_dealership_override(self, feature_text):
+        """
+        Check if there's a dealership-specific override for this feature.
+        
+        Args:
+            feature_text (str): Feature text to check
+            
+        Returns:
+            tuple or None: (checkbox_name, 1.0) if override exists, None otherwise
+        """
+        normalized_text = self.normalize_text(feature_text)
+        
+        for pattern, checkbox in self.dealership_overrides.items():
+            if pattern.lower() in normalized_text:
+                logger.info(f"Applied dealership override: '{pattern}' -> '{checkbox}'")
+                return checkbox, 1.0  # Override has maximum confidence
+                
+        return None
+    
+    async def map_features(self, extracted_features):
         """
         Map extracted features to vAuto checkboxes.
         
         Args:
-            extracted_features: List of extracted features
+            extracted_features (list): List of extracted features from window sticker
             
         Returns:
-            dict: Mapping of vAuto checkbox names to boolean values
+            dict: Dictionary mapping vAuto checkbox labels to boolean values
         """
-        logger.info(f"Mapping {len(extracted_features)} extracted features to vAuto checkboxes")
+        logger.info(f"Mapping {len(extracted_features)} extracted features")
         
         mapped_features = {}
         
+        for feature in extracted_features:
+            vAuto_feature = await self._map_single_feature(feature)
+            if vAuto_feature:
+                mapped_features[vAuto_feature] = True
+        
+        logger.info(f"Mapped {len(mapped_features)} features to vAuto checkboxes")
+        return mapped_features
+    
+    async def _map_single_feature(self, feature_text):
+        """
+        Map a single feature to a vAuto checkbox.
+        
+        Args:
+            feature_text (str): Extracted feature text
+            
+        Returns:
+            str: vAuto checkbox label or None if no match
+        """
+        # Check dealership overrides first
+        override = self.check_dealership_override(feature_text)
+        if override:
+            checkbox_name, _ = override
+            return checkbox_name
+        
+        # First, try direct lookup in mapping dictionary
+        for vAuto_feature, aliases in self.feature_mapping.items():
+            if feature_text in aliases:
+                logger.debug(f"Direct mapping found: '{feature_text}' -> '{vAuto_feature}'")
+                return vAuto_feature
+        
+        # If no direct match, use fuzzy matching
+        best_match = None
+        best_score = 0
+        
+        for vAuto_feature, aliases in self.feature_mapping.items():
+            for alias in aliases:
+                # Try different fuzzy matching algorithms
+                base_score = self.similarity_algorithm(feature_text.lower(), alias.lower())
+                
+                # Apply category boost if applicable
+                category_boost = self.get_category_boost(feature_text)
+                final_score = min(1.0, base_score + category_boost)
+                
+                if final_score > best_score:
+                    best_score = final_score
+                    best_match = vAuto_feature
+        
+        # Check if score exceeds confidence threshold
+        if best_score >= self.confidence_threshold:
+            logger.debug(f"Fuzzy mapping found: '{feature_text}' -> '{best_match}' (score: {best_score})")
+            return best_match
+        else:
+            logger.debug(f"No mapping found for feature: '{feature_text}' (best score: {best_score})")
+            return None
+
+class MappingLearner:
+    """
+    Learning mechanism to improve feature mappings over time.
+    """
+    
+    def __init__(self, mapper):
+        """
+        Initialize the mapping learner.
+        
+        Args:
+            mapper (FeatureMapper): Feature mapper instance
+        """
+        self.mapper = mapper
+        self.corrections = {}  # Store user corrections
+        self.corrections_file = os.path.join("configs", "mapping_corrections.json")
+        
+        self._load_corrections()
+        
+        logger.info("Mapping Learner initialized")
+    
+    def _load_corrections(self):
+        """
+        Load mapping corrections from file.
+        """
         try:
-            # Normalize extracted features
-            normalized_features = [normalize_text(feature) for feature in extracted_features]
+            if os.path.exists(self.corrections_file):
+                with open(self.corrections_file, 'r') as f:
+                    self.corrections = json.load(f)
+                
+                logger.info(f"Loaded {len(self.corrections)} mapping corrections from {self.corrections_file}")
+            else:
+                logger.info("No mapping corrections file found")
+                self.corrections = {}
+                
+        except Exception as e:
+            logger.error(f"Error loading mapping corrections: {str(e)}")
+            logger.warning("Using empty corrections")
+            self.corrections = {}
+    
+    def _save_corrections(self):
+        """
+        Save mapping corrections to file.
+        
+        Returns:
+            bool: True if save successful, False otherwise
+        """
+        try:
+            with open(self.corrections_file, 'w') as f:
+                json.dump(self.corrections, f, indent=2)
             
-            # Process each vAuto checkbox
-            for vauto_feature, feature_variants in self.feature_mapping.items():
-                # Check if any variant matches any extracted feature
-                is_present = await self._check_feature_presence(normalized_features, feature_variants)
-                mapped_features[vauto_feature] = is_present
-            
-            logger.info(f"Mapped features: {sum(1 for v in mapped_features.values() if v)} present out of {len(mapped_features)} total")
-            return mapped_features
+            logger.info(f"Saved {len(self.corrections)} mapping corrections to {self.corrections_file}")
+            return True
             
         except Exception as e:
-            logger.error(f"Error mapping features: {str(e)}")
+            logger.error(f"Error saving mapping corrections: {str(e)}")
+            return False
+    
+    def record_correction(self, feature_text, old_mapping, new_mapping):
+        """
+        Record a user correction for learning.
+        
+        Args:
+            feature_text (str): Extracted feature text
+            old_mapping (str): Old vAuto checkbox mapping (or None)
+            new_mapping (str): New vAuto checkbox mapping
+            
+        Returns:
+            bool: True if correction recorded, False otherwise
+        """
+        logger.info(f"Recording correction: '{feature_text}' from '{old_mapping}' to '{new_mapping}'")
+        
+        try:
+            if feature_text not in self.corrections:
+                self.corrections[feature_text] = []
+                
+            self.corrections[feature_text].append({
+                'old': old_mapping,
+                'new': new_mapping,
+                'timestamp': datetime.now().isoformat()
+            })
+            
+            # Add the new mapping
+            self.mapper.add_mapping(feature_text, new_mapping)
+            
+            # Save corrections
+            saved = self._save_corrections()
+            
+            return saved
+                
+        except Exception as e:
+            logger.error(f"Error recording correction: {str(e)}")
+            return False
+    
+    def suggest_improvements(self):
+        """
+        Suggest improvements to the mapping based on corrections.
+        
+        Returns:
+            dict: Dictionary of suggested improvements
+        """
+        logger.info("Suggesting mapping improvements")
+        
+        suggestions = {}
+        
+        try:
+            # Analyze correction patterns
+            for feature_text, corrections in self.corrections.items():
+                if len(corrections) >= 3:  # Require at least 3 corrections
+                    # Count the frequency of new mappings
+                    mapping_counts = {}
+                    for correction in corrections:
+                        new_mapping = correction['new']
+                        mapping_counts[new_mapping] = mapping_counts.get(new_mapping, 0) + 1
+                    
+                    # Find the most common mapping
+                    most_common = max(mapping_counts.items(), key=lambda x: x[1])
+                    most_common_mapping, count = most_common
+                    
+                    # If the most common mapping is used more than 75% of the time, suggest it
+                    if count / len(corrections) >= 0.75:
+                        suggestions[feature_text] = most_common_mapping
+            
+            logger.info(f"Generated {len(suggestions)} mapping improvement suggestions")
+            return suggestions
+                
+        except Exception as e:
+            logger.error(f"Error suggesting improvements: {str(e)}")
             return {}
     
-    async def _check_feature_presence(self, normalized_features: List[str], feature_variants: List[str]) -> bool:
+    def apply_suggestions(self):
         """
-        Check if any feature variant is present in the extracted features.
+        Apply suggested improvements to the mapping.
         
-        Args:
-            normalized_features: List of normalized extracted features
-            feature_variants: List of feature variants to check
-            
         Returns:
-            bool: True if any variant is present, False otherwise
+            int: Number of improvements applied
         """
-        # Normalize feature variants
-        normalized_variants = [normalize_text(variant) for variant in feature_variants]
+        logger.info("Applying mapping improvement suggestions")
         
-        # Check for exact matches first
-        for variant in normalized_variants:
-            if variant in normalized_features:
-                return True
+        count = 0
         
-        # If no exact match, use fuzzy matching
-        return await self._fuzzy_match_feature(normalized_features, normalized_variants)
-    
-    async def _fuzzy_match_feature(self, normalized_features: List[str], normalized_variants: List[str]) -> bool:
-        """
-        Use fuzzy matching to check if any feature variant is present.
-        
-        Args:
-            normalized_features: List of normalized extracted features
-            normalized_variants: List of normalized feature variants
+        try:
+            # Get suggestions
+            suggestions = self.suggest_improvements()
             
-        Returns:
-            bool: True if any variant matches with sufficient confidence, False otherwise
-        """
-        # Run fuzzy matching in a separate thread to avoid blocking
-        result = await asyncio.to_thread(
-            self._fuzzy_match_feature_sync,
-            normalized_features,
-            normalized_variants
-        )
-        
-        return result
-    
-    def _fuzzy_match_feature_sync(self, normalized_features: List[str], normalized_variants: List[str]) -> bool:
-        """
-        Synchronous function for fuzzy matching.
-        
-        Args:
-            normalized_features: List of normalized extracted features
-            normalized_variants: List of normalized feature variants
-            
-        Returns:
-            bool: True if any variant matches with sufficient confidence, False otherwise
-        """
-        for variant in normalized_variants:
-            for feature in normalized_features:
-                # Skip very short features to avoid false positives
-                if len(feature) < 4 or len(variant) < 4:
+            # Apply each suggestion
+            for feature_text, suggested_mapping in suggestions.items():
+                # Check current mapping
+                current_mapping = None
+                for vAuto_feature, aliases in self.mapper.feature_mapping.items():
+                    if feature_text in aliases:
+                        current_mapping = vAuto_feature
+                        break
+                
+                # Skip if already mapped correctly
+                if current_mapping == suggested_mapping:
                     continue
                 
-                # Use token sort ratio for better matching of phrases
-                ratio = fuzz.token_sort_ratio(variant, feature)
+                # Apply the suggested mapping
+                if current_mapping:
+                    # Update existing mapping
+                    self.mapper.update_mapping(feature_text, feature_text, suggested_mapping)
+                else:
+                    # Add new mapping
+                    self.mapper.add_mapping(feature_text, suggested_mapping)
                 
-                # Check if ratio exceeds threshold
-                if ratio >= self.confidence_threshold * 100:  # Convert from 0-1 to 0-100
-                    return True
-        
-        return False
-    
-    def add_mapping(self, feature_text: str, vauto_feature: str) -> bool:
-        """
-        Add a new mapping.
-        
-        Args:
-            feature_text: Feature text to map
-            vauto_feature: vAuto checkbox name
+                count += 1
             
-        Returns:
-            bool: True if mapping added successfully, False otherwise
-        """
-        logger.info(f"Adding mapping: '{feature_text}' -> '{vauto_feature}'")
-        
-        try:
-            # Normalize feature text
-            normalized_text = normalize_text(feature_text)
-            
-            # Check if vAuto feature exists in mapping
-            if vauto_feature in self.feature_mapping:
-                # Check if feature text already exists
-                if normalized_text in self.feature_mapping[vauto_feature]:
-                    logger.warning(f"Mapping already exists: '{feature_text}' -> '{vauto_feature}'")
-                    return True
+            logger.info(f"Applied {count} mapping improvements")
+            return count
                 
-                # Add feature text to existing mapping
-                self.feature_mapping[vauto_feature].append(normalized_text)
-            else:
-                # Create new mapping
-                self.feature_mapping[vauto_feature] = [normalized_text]
-            
-            # Save mapping
-            success = save_json_file(self.mapping_file, self.feature_mapping)
-            
-            if success:
-                logger.info(f"Mapping added successfully: '{feature_text}' -> '{vauto_feature}'")
-            else:
-                logger.error(f"Failed to save mapping: '{feature_text}' -> '{vauto_feature}'")
-            
-            return success
-            
         except Exception as e:
-            logger.error(f"Error adding mapping: {str(e)}")
-            return False
-    
-    def update_mapping(self, old_feature: str, new_feature: str, vauto_feature: str) -> bool:
-        """
-        Update an existing mapping.
-        
-        Args:
-            old_feature: Old feature text
-            new_feature: New feature text
-            vauto_feature: vAuto checkbox name
-            
-        Returns:
-            bool: True if mapping updated successfully, False otherwise
-        """
-        logger.info(f"Updating mapping: '{old_feature}' -> '{new_feature}' for '{vauto_feature}'")
-        
-        try:
-            # Normalize feature texts
-            normalized_old = normalize_text(old_feature)
-            normalized_new = normalize_text(new_feature)
-            
-            # Check if vAuto feature exists in mapping
-            if vauto_feature not in self.feature_mapping:
-                logger.error(f"vAuto feature not found: '{vauto_feature}'")
-                return False
-            
-            # Check if old feature exists
-            if normalized_old not in self.feature_mapping[vauto_feature]:
-                logger.error(f"Old feature not found: '{old_feature}' for '{vauto_feature}'")
-                return False
-            
-            # Remove old feature
-            self.feature_mapping[vauto_feature].remove(normalized_old)
-            
-            # Add new feature
-            self.feature_mapping[vauto_feature].append(normalized_new)
-            
-            # Save mapping
-            success = save_json_file(self.mapping_file, self.feature_mapping)
-            
-            if success:
-                logger.info(f"Mapping updated successfully: '{old_feature}' -> '{new_feature}' for '{vauto_feature}'")
-            else:
-                logger.error(f"Failed to save mapping: '{old_feature}' -> '{new_feature}' for '{vauto_feature}'")
-            
-            return success
-            
-        except Exception as e:
-            logger.error(f"Error updating mapping: {str(e)}")
-            return False
+            logger.error(f"Error applying suggestions: {str(e)}")
+            return 0

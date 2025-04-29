@@ -468,5 +468,41 @@ class SeleniumBrowser(BrowserInterface):
         Args:
             script: JavaScript code to execute
             *args: Arguments to pass to the script
-   
-(Content truncated due to size limit. Use line ranges to read in chunks)
+            
+        Returns:
+            Any: Result of the script execution
+        """
+        logger.debug(f"Executing script: {script}")
+        
+        if not self.browser:
+            await self.initialize()
+        
+        try:
+            result = await asyncio.to_thread(self.browser.execute_script, script, *args)
+            return result
+        except Exception as e:
+            logger.error(f"Error executing script: {str(e)}")
+            raise
+    
+    def _get_by_method(self, by: str) -> Any:
+        """
+        Get the Selenium By method for the given selector type.
+        
+        Args:
+            by: Selector type (xpath, css, id, etc.)
+            
+        Returns:
+            By: Selenium By method
+        """
+        by_map = {
+            "xpath": By.XPATH,
+            "css": By.CSS_SELECTOR,
+            "id": By.ID,
+            "name": By.NAME,
+            "tag": By.TAG_NAME,
+            "class": By.CLASS_NAME,
+            "link_text": By.LINK_TEXT,
+            "partial_link_text": By.PARTIAL_LINK_TEXT
+        }
+        
+        return by_map.get(by.lower(), By.XPATH)

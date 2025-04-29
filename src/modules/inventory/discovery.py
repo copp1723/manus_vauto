@@ -386,5 +386,171 @@ class InventoryDiscoveryModule(InventoryDiscoveryInterface):
         """
         # Try various attributes that might contain the ID
         attrs_to_check = ["id", "data-id", "data-key", "data-row-key"]
-  
-(Content truncated due to size limit. Use line ranges to read in chunks)
+        
+        for attr in attrs_to_check:
+            value = await self.browser.get_attribute(element, attr)
+            if value:
+                # Extract numeric ID if present
+                match = re.search(r'\d+', value)
+                if match:
+                    return match.group(0)
+                return value
+        
+        # Try to find links that might contain the ID
+        links = await self.browser.find_elements(
+            ".//a[contains(@href, 'vehicle') or contains(@href, 'inventory') or contains(@href, 'detail')]",
+            element
+        )
+        
+        for link in links:
+            href = await self.browser.get_attribute(link, "href")
+            if href:
+                # Extract ID from URL
+                match = re.search(r'[?&]id=(\d+)', href)
+                if match:
+                    return match.group(1)
+        
+        return None
+    
+    async def _extract_vehicle_info_from_detail(self) -> Dict[str, Any]:
+        """
+        Extract vehicle information from the detail page.
+        
+        Returns:
+            dict: Vehicle information
+        """
+        info = {}
+        
+        try:
+            # Extract year, make, model
+            title_element = await self.browser.wait_for_presence(
+                "//h1[contains(@class, 'vehicle-title') or contains(@class, 'detail-title')]"
+            )
+            
+            if title_element:
+                title_text = await self.browser.get_text(title_element)
+                # Parse title text (e.g., "2024 Toyota Corolla LE")
+                parts = title_text.split()
+                if len(parts) >= 2:
+                    # First part is usually the year
+                    if parts[0].isdigit() and len(parts[0]) == 4:
+                        info["year"] = parts[0]
+                        # Second part is usually the make
+                        info["make"] = parts[1]
+                        # The rest could be model and trim
+                        if len(parts) >= 3:
+                            info["model"] = " ".join(parts[2:])
+            
+            # Extract VIN
+            vin_selectors = [
+                "//span[contains(text(), 'VIN')]/following-sibling::span",
+                "//div[contains(text(), 'VIN')]/following-sibling::div",
+                "//label[contains(text(), 'VIN')]/following-sibling::div"
+            ]
+            
+            for selector in vin_selectors:
+                vin_element = await self.browser.wait_for_presence(selector)
+                if vin_element:
+                    vin_text = await self.browser.get_text(vin_element)
+                    if vin_text and len(vin_text) >= 17:  # VINs are typically 17 characters
+                        info["vin"] = vin_text.strip()
+                        break
+            
+            # Extract stock number
+            stock_selectors = [
+                "//span[contains(text(), 'Stock')]/following-sibling::span",
+                "//div[contains(text(), 'Stock')]/following-sibling::div",
+                "//label[contains(text(), 'Stock')]/following-sibling::div"
+            ]
+            
+            for selector in stock_selectors:
+                stock_element = await self.browser.wait_for_presence(selector)
+                if stock_element:
+                    stock_text = await self.browser.get_text(stock_element)
+                    if stock_text:
+                        info["stock_number"] = stock_text.strip()
+                        break
+            
+            return info
+            
+        except Exception as e:
+            logger.warning(f"Error extracting vehicle info from detail page: {str(e)}")
+            return info
+    
+    async def _get_window_sticker_url(self) -> Optional[str]:
+        """
+        Get window sticker URL from the detail page.
+        
+        Returns:
+            str: Window sticker URL or None if not found
+        """
+        try:
+            # Navigate to Factory Equipment tab
+            factory_equipment_tab = await self.browser.wait_for_presence("//div[@id='ext-gen201']")
+            if factory_equipment_tab:
+                await self.browser.click_element(factory_equipment_tab)
+            else:
+                logger.warning("Factory Equipment tab not found, trying alternative selectors")
+                
+                # Try alternative selectors
+                tab_selectors = [
+                    "//a[contains(text(), 'Factory Equipment')]",
+                    "//div[contains(text(), 'Factory Equipment')]",
+                    "//span[contains(text(), 'Factory Equipment')]"
+                ]
+                
+                for selector in tab_selectors:
+                    tab = await self.browser.wait_for_presence(selector)
+                    if tab:
+                        await self.browser.click_element(tab)
+                        break
+                else:
+                    logger.error("Factory Equipment tab not found")
+                    return None
+            
+            # Wait for the Factory Equipment tab to load
+            await asyncio.sleep(2)
+            
+            # Look for window sticker button or link
+            sticker_selectors = [
+                "//button[contains(text(), 'Window Sticker')]",
+                "//a[contains(text(), 'Window Sticker')]",
+                "//div[contains(text(), 'Window Sticker')]",
+                "//span[contains(text(), 'Window Sticker')]"
+            ]
+            
+            for selector in sticker_selectors:
+                sticker_element = await self.browser.wait_for_presence(selector)
+                if sticker_element:
+                    # Check if this is a link with href
+                    href = await self.browser.get_attribute(sticker_element, "href")
+                    if href:
+                        return href
+                    
+                    # If not a direct link, click it to reveal the window sticker
+                    await self.browser.click_element(sticker_element)
+                    
+                    # Wait for window sticker to load
+                    await asyncio.sleep(2)
+                    
+                    # Look for window sticker URL in newly revealed elements
+                    sticker_url_selectors = [
+                        "//a[contains(@href, 'window') or contains(@href, 'sticker') or contains(@href, 'pdf')]",
+                        "//iframe[contains(@src, 'window') or contains(@src, 'sticker') or contains(@src, 'pdf')]"
+                    ]
+                    
+                    for url_selector in sticker_url_selectors:
+                        url_element = await self.browser.wait_for_presence(url_selector)
+                        if url_element:
+                            url = await self.browser.get_attribute(url_element, "href") or await self.browser.get_attribute(url_element, "src")
+                            if url:
+                                return url
+                    
+                    break
+            
+            logger.warning("Window sticker URL not found")
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Error getting window sticker URL: {str(e)}")
+            return None

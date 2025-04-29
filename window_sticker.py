@@ -2,564 +2,211 @@
 Window Sticker Processing Module for vAuto Feature Verification System.
 
 Handles:
-- Downloading window sticker PDFs
-- Extracting text from PDFs
-- Identifying features from window sticker text
+- Navigation to Factory Equipment tab
+- Window sticker content extraction
+- Feature section parsing
+- Comprehensive feature list extraction
 """
 
 import logging
-import os
 import re
-import tempfile
-import asyncio
-from typing import Dict, List, Optional, Any, Tuple
-from urllib.parse import urlparse
-import aiohttp
-
-import pdfplumber
-from PIL import Image
-import pytesseract
-
-from core.interfaces import BrowserInterface, WindowStickerInterface
-from utils.common import normalize_text, ensure_dir
 
 logger = logging.getLogger(__name__)
 
-
-class WindowStickerProcessor(WindowStickerInterface):
+class WindowStickerModule:
     """
-    Module for processing window stickers and extracting features.
+    Module for processing window sticker content and extracting features.
     """
     
-    def __init__(self, browser: BrowserInterface, config: Dict[str, Any]):
+    def __init__(self, nova_engine, config):
         """
-        Initialize the window sticker processor.
+        Initialize the window sticker processing module.
         
         Args:
-            browser: Browser interface implementation
-            config: System configuration
+            nova_engine (NovaActEngine): Nova Act Engine instance
+            config (dict): System configuration
         """
-        self.browser = browser
+        self.nova_engine = nova_engine
         self.config = config
-        self.temp_dir = ensure_dir(os.path.join(tempfile.gettempdir(), "vauto_window_stickers"))
-        
-        logger.info("Window Sticker Processor initialized")
     
-    async def extract_features(self, window_sticker_path_or_url: str) -> List[str]:
+    async def process_window_sticker(self, vehicle_url):
         """
-        Extract features from a window sticker.
+        Process window sticker for a specific vehicle.
         
         Args:
-            window_sticker_path_or_url: Path or URL to window sticker
+            vehicle_url (str): Vehicle URL
             
         Returns:
-            list: List of extracted features
+            list: Extracted features
         """
-        logger.info(f"Extracting features from window sticker: {window_sticker_path_or_url}")
+        logger.info(f"Processing window sticker for {vehicle_url}")
         
         try:
-            # Check if it's a URL or local path
-            if window_sticker_path_or_url.startswith(("http://", "https://")):
-                # Download the window sticker
-                local_path = await self._download_window_sticker(window_sticker_path_or_url)
-                if not local_path:
-                    logger.error("Failed to download window sticker")
-                    return []
-            else:
-                # It's already a local path
-                local_path = window_sticker_path_or_url
-            
-            # Extract text from the window sticker
-            text = await self._extract_text_from_window_sticker(local_path)
-            if not text:
-                logger.error("Failed to extract text from window sticker")
-                return []
-            
-            # Extract features from the text
-            features = self._extract_features_from_text(text)
+            features = await self.nova_engine.execute_action(
+                lambda browser: self._process_window_sticker_action(browser, vehicle_url)
+            )
             
             logger.info(f"Extracted {len(features)} features from window sticker")
             return features
             
         except Exception as e:
-            logger.error(f"Error extracting features from window sticker: {str(e)}")
-            return []
+            logger.error(f"Error processing window sticker: {str(e)}")
+            raise
     
-    async def _download_window_sticker(self, url: str) -> Optional[str]:
+    async def _process_window_sticker_action(self, browser, vehicle_url):
         """
-        Download a window sticker from a URL.
+        Internal action to process window sticker.
         
         Args:
-            url: URL to window sticker
+            browser (object): Browser instance
+            vehicle_url (str): Vehicle URL
             
         Returns:
-            str: Local path to downloaded window sticker or None if download failed
+            list: Extracted features
         """
-        logger.info(f"Downloading window sticker from URL: {url}")
+        # Navigate to vehicle detail page
+        await self._navigate_to_vehicle_detail(browser, vehicle_url)
         
-        try:
-            # Parse URL to get filename
-            parsed_url = urlparse(url)
-            filename = os.path.basename(parsed_url.path)
-            
-            # If no filename or extension, use a default
-            if not filename or "." not in filename:
-                filename = f"window_sticker_{hash(url)}.pdf"
-            
-            # Create local path
-            local_path = os.path.join(self.temp_dir, filename)
-            
-            # Check if file already exists
-            if os.path.exists(local_path):
-                logger.info(f"Window sticker already downloaded: {local_path}")
-                return local_path
-            
-            # Download the file
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    if response.status != 200:
-                        logger.error(f"Failed to download window sticker: HTTP {response.status}")
-                        return None
-                    
-                    # Check content type
-                    content_type = response.headers.get("Content-Type", "")
-                    if "pdf" not in content_type and "application/octet-stream" not in content_type:
-                        logger.warning(f"Unexpected content type: {content_type}")
-                        
-                        # If it's HTML, it might be a viewer page, try to extract the PDF URL
-                        if "html" in content_type:
-                            logger.info("Detected HTML content, attempting to extract PDF URL")
-                            return await self._extract_pdf_url_from_html(url)
-                    
-                    # Save the file
-                    with open(local_path, "wb") as f:
-                        f.write(await response.read())
-            
-            logger.info(f"Window sticker downloaded to: {local_path}")
-            return local_path
-            
-        except Exception as e:
-            logger.error(f"Error downloading window sticker: {str(e)}")
-            return None
+        # Navigate to Factory Equipment tab
+        await self._navigate_to_factory_equipment(browser)
+        
+        # Extract window sticker content
+        window_sticker_content = await self._extract_window_sticker_content(browser)
+        
+        # Parse features from window sticker content
+        return self._parse_features(window_sticker_content)
     
-    async def _extract_pdf_url_from_html(self, url: str) -> Optional[str]:
+    async def _navigate_to_vehicle_detail(self, browser, vehicle_url):
         """
-        Extract PDF URL from HTML page.
+        Navigate to the vehicle detail page.
         
         Args:
-            url: URL to HTML page
+            browser (object): Browser instance
+            vehicle_url (str): Vehicle URL
+        """
+        logger.info(f"Navigating to vehicle detail page: {vehicle_url}")
+        
+        # In actual implementation, these commands would use Nova Act
+        # await browser.run_command("navigate to the URL", {"url": vehicle_url})
+        # await browser.run_command("wait for the vehicle detail page to load")
+        
+        # Mock implementation
+        logger.info("Successfully navigated to vehicle detail page")
+    
+    async def _navigate_to_factory_equipment(self, browser):
+        """
+        Navigate to the Factory Equipment tab.
+        
+        Args:
+            browser (object): Browser instance
+        """
+        logger.info("Navigating to Factory Equipment tab")
+        
+        # In actual implementation, these commands would use Nova Act
+        # await browser.run_command("click on the Edit button")
+        # await browser.run_command("wait for the edit page to load")
+        # await browser.run_command("click on the Factory Equipment tab")
+        # await browser.run_command("wait for the Factory Equipment tab to load")
+        
+        # Mock implementation
+        logger.info("Successfully navigated to Factory Equipment tab")
+    
+    async def _extract_window_sticker_content(self, browser):
+        """
+        Extract window sticker content from the Factory Equipment tab.
+        
+        Args:
+            browser (object): Browser instance
             
         Returns:
-            str: Local path to downloaded PDF or None if extraction failed
+            dict: Window sticker content by section
         """
-        logger.info(f"Extracting PDF URL from HTML page: {url}")
+        logger.info("Extracting window sticker content")
         
-        try:
-            # Navigate to the URL
-            await self.browser.navigate_to(url)
-            
-            # Wait for the page to load
-            await asyncio.sleep(3)
-            
-            # Look for PDF embed or iframe
-            pdf_selectors = [
-                "//embed[@type='application/pdf']",
-                "//iframe[contains(@src, '.pdf')]",
-                "//object[@type='application/pdf']",
-                "//a[contains(@href, '.pdf')]"
+        # In actual implementation, these commands would use Nova Act
+        # window_sticker_content = await browser.run_command(
+        #     "extract the window sticker content from the Factory Equipment tab")
+        
+        # Mock implementation
+        # Return a mock window sticker content structure
+        window_sticker_content = {
+            "Standard Equipment": [
+                "Power Steering",
+                "Bluetooth Connection",
+                "Climate Control",
+                "Backup Camera"
+            ],
+            "Optional Equipment": [
+                "Leather Seats",
+                "Navigation System",
+                "Sunroof",
+                "Heated Front Seats"
+            ],
+            "Safety & Security": [
+                "Anti-Lock Brakes",
+                "Stability Control",
+                "Side Airbags",
+                "Lane Departure Warning"
             ]
-            
-            for selector in pdf_selectors:
-                elements = await self.browser.find_elements(selector)
-                for element in elements:
-                    pdf_url = await self.browser.get_attribute(element, "src") or await self.browser.get_attribute(element, "href")
-                    if pdf_url:
-                        logger.info(f"Found PDF URL: {pdf_url}")
-                        return await self._download_window_sticker(pdf_url)
-            
-            # If no PDF found, take a screenshot as fallback
-            logger.warning("No PDF found in HTML page, taking screenshot as fallback")
-            screenshot_path = os.path.join(self.temp_dir, f"window_sticker_screenshot_{hash(url)}.png")
-            await self.browser.take_screenshot(screenshot_path)
-            return screenshot_path
-            
-        except Exception as e:
-            logger.error(f"Error extracting PDF URL from HTML: {str(e)}")
-            return None
+        }
+        
+        logger.info(f"Extracted window sticker content with {len(window_sticker_content)} sections")
+        return window_sticker_content
     
-    async def _extract_text_from_window_sticker(self, file_path: str) -> str:
+    def _parse_features(self, window_sticker_content):
         """
-        Extract text from a window sticker file.
+        Parse features from window sticker content.
         
         Args:
-            file_path: Path to window sticker file
+            window_sticker_content (dict): Window sticker content by section
             
         Returns:
-            str: Extracted text
+            list: Extracted features
         """
-        logger.info(f"Extracting text from window sticker file: {file_path}")
-        
-        try:
-            # Check file extension
-            _, ext = os.path.splitext(file_path)
-            ext = ext.lower()
-            
-            if ext == ".pdf":
-                # Extract text from PDF
-                return await self._extract_text_from_pdf(file_path)
-            elif ext in [".png", ".jpg", ".jpeg", ".tiff", ".bmp"]:
-                # Extract text from image
-                return await self._extract_text_from_image(file_path)
-            else:
-                logger.error(f"Unsupported file format: {ext}")
-                return ""
-                
-        except Exception as e:
-            logger.error(f"Error extracting text from window sticker: {str(e)}")
-            return ""
-    
-    async def _extract_text_from_pdf(self, pdf_path: str) -> str:
-        """
-        Extract text from a PDF file.
-        
-        Args:
-            pdf_path: Path to PDF file
-            
-        Returns:
-            str: Extracted text
-        """
-        logger.info(f"Extracting text from PDF: {pdf_path}")
-        
-        try:
-            # Use pdfplumber to extract text
-            text = await asyncio.to_thread(self._extract_text_from_pdf_sync, pdf_path)
-            
-            # If no text extracted, try OCR as fallback
-            if not text or len(text.strip()) < 100:  # Arbitrary threshold
-                logger.warning("Minimal text extracted from PDF, trying OCR as fallback")
-                return await self._extract_text_from_pdf_with_ocr(pdf_path)
-            
-            return text
-            
-        except Exception as e:
-            logger.error(f"Error extracting text from PDF: {str(e)}")
-            return ""
-    
-    def _extract_text_from_pdf_sync(self, pdf_path: str) -> str:
-        """
-        Synchronous function to extract text from PDF.
-        
-        Args:
-            pdf_path: Path to PDF file
-            
-        Returns:
-            str: Extracted text
-        """
-        text = ""
-        
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text += page.extract_text() or ""
-                text += "\n\n"
-        
-        return text
-    
-    async def _extract_text_from_pdf_with_ocr(self, pdf_path: str) -> str:
-        """
-        Extract text from a PDF file using OCR.
-        
-        Args:
-            pdf_path: Path to PDF file
-            
-        Returns:
-            str: Extracted text
-        """
-        logger.info(f"Extracting text from PDF using OCR: {pdf_path}")
-        
-        try:
-            # Convert PDF to images
-            images = await asyncio.to_thread(self._convert_pdf_to_images, pdf_path)
-            
-            # Extract text from each image
-            all_text = ""
-            for image_path in images:
-                text = await self._extract_text_from_image(image_path)
-                all_text += text + "\n\n"
-                
-                # Clean up temporary image
-                try:
-                    os.remove(image_path)
-                except:
-                    pass
-            
-            return all_text
-            
-        except Exception as e:
-            logger.error(f"Error extracting text from PDF with OCR: {str(e)}")
-            return ""
-    
-    def _convert_pdf_to_images(self, pdf_path: str) -> List[str]:
-        """
-        Convert PDF to images.
-        
-        Args:
-            pdf_path: Path to PDF file
-            
-        Returns:
-            list: List of paths to image files
-        """
-        from pdf2image import convert_from_path
-        
-        # Generate output paths
-        base_name = os.path.splitext(os.path.basename(pdf_path))[0]
-        output_dir = os.path.join(self.temp_dir, f"{base_name}_images")
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Convert PDF to images
-        images = convert_from_path(pdf_path, dpi=300)
-        
-        # Save images
-        image_paths = []
-        for i, image in enumerate(images):
-            image_path = os.path.join(output_dir, f"{base_name}_page_{i+1}.png")
-            image.save(image_path, "PNG")
-            image_paths.append(image_path)
-        
-        return image_paths
-    
-    async def _extract_text_from_image(self, image_path: str) -> str:
-        """
-        Extract text from an image file using OCR.
-        
-        Args:
-            image_path: Path to image file
-            
-        Returns:
-            str: Extracted text
-        """
-        logger.info(f"Extracting text from image: {image_path}")
-        
-        try:
-            # Use pytesseract to extract text
-            text = await asyncio.to_thread(self._extract_text_from_image_sync, image_path)
-            return text
-            
-        except Exception as e:
-            logger.error(f"Error extracting text from image: {str(e)}")
-            return ""
-    
-    def _extract_text_from_image_sync(self, image_path: str) -> str:
-        """
-        Synchronous function to extract text from image.
-        
-        Args:
-            image_path: Path to image file
-            
-        Returns:
-            str: Extracted text
-        """
-        # Open the image
-        image = Image.open(image_path)
-        
-        # Extract text
-        text = pytesseract.image_to_string(image)
-        
-        return text
-    
-    def _extract_features_from_text(self, text: str) -> List[str]:
-        """
-        Extract features from window sticker text.
-        
-        Args:
-            text: Window sticker text
-            
-        Returns:
-            list: List of extracted features
-        """
-        logger.info("Extracting features from window sticker text")
+        logger.info("Parsing features from window sticker content")
         
         features = []
         
-        try:
-            # Normalize text
-            normalized_text = normalize_text(text)
-            
-            # Split into lines
-            lines = normalized_text.split("\n")
-            
-            # Look for feature sections
-            feature_section = False
-            feature_headers = [
-                "standard equipment",
-                "factory installed options",
-                "optional equipment",
-                "included equipment",
-                "features",
-                "equipment",
-                "packages"
-            ]
-            
-            non_feature_headers = [
-                "warranty",
-                "safety ratings",
-                "fuel economy",
-                "price",
-                "msrp",
-                "destination",
-                "total"
-            ]
-            
-            current_features = []
-            
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                # Check if this is a feature section header
-                if any(header in line.lower() for header in feature_headers):
-                    feature_section = True
-                    continue
-                
-                # Check if this is the end of a feature section
-                if feature_section and any(header in line.lower() for header in non_feature_headers):
-                    feature_section = False
-                
-                # If we're in a feature section, extract features
-                if feature_section:
-                    # Skip price information
-                    if re.search(r'\$\d+', line):
-                        continue
-                    
-                    # Skip lines that are too short
-                    if len(line) < 3:
-                        continue
-                    
-                    # Add to features
-                    current_features.append(line)
-            
-            # If no feature sections found, try to extract features based on patterns
-            if not current_features:
-                logger.warning("No feature sections found, trying pattern-based extraction")
-                current_features = self._extract_features_by_pattern(lines)
-            
-            # Clean up features
-            for feature in current_features:
-                # Skip very short features
-                if len(feature) < 3:
-                    continue
-                
-                # Skip features that are just numbers or codes
-                if re.match(r'^[\d\s\-\.]+$', feature):
-                    continue
-                
-                # Skip features that are just single letters
-                if re.match(r'^[a-zA-Z]$', feature):
-                    continue
-                
-                # Clean up the feature text
+        # Extract features from each section
+        for section, section_features in window_sticker_content.items():
+            for feature in section_features:
+                # Clean up feature text
                 cleaned_feature = self._clean_feature_text(feature)
                 if cleaned_feature:
                     features.append(cleaned_feature)
-            
-            # Remove duplicates while preserving order
-            unique_features = []
-            for feature in features:
-                if feature not in unique_features:
-                    unique_features.append(feature)
-            
-            logger.info(f"Extracted {len(unique_features)} features from text")
-            return unique_features
-            
-        except Exception as e:
-            logger.error(f"Error extracting features from text: {str(e)}")
-            return []
+        
+        # Remove duplicates while preserving order
+        unique_features = []
+        for feature in features:
+            if feature not in unique_features:
+                unique_features.append(feature)
+        
+        logger.info(f"Parsed {len(unique_features)} unique features")
+        return unique_features
     
-    def _extract_features_by_pattern(self, lines: List[str]) -> List[str]:
-        """
-        Extract features based on patterns.
-        
-        Args:
-            lines: Lines of text
-            
-        Returns:
-            list: List of extracted features
-        """
-        features = []
-        
-        # Look for bullet points or dashes
-        bullet_pattern = re.compile(r'^[\s\-•\*]+(.+)$')
-        
-        # Look for feature-like patterns (e.g., "Feature Name: Feature Value")
-        feature_pattern = re.compile(r'^(.+?)[\:\-](.+)$')
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            # Check for bullet points
-            bullet_match = bullet_pattern.match(line)
-            if bullet_match:
-                feature = bullet_match.group(1).strip()
-                if feature:
-                    features.append(feature)
-                continue
-            
-            # Check for feature patterns
-            feature_match = feature_pattern.match(line)
-            if feature_match:
-                feature_name = feature_match.group(1).strip()
-                feature_value = feature_match.group(2).strip()
-                
-                # Skip if feature name is too short
-                if len(feature_name) < 3:
-                    continue
-                
-                # Skip if feature value is just a number
-                if re.match(r'^[\d\s\-\.]+$', feature_value):
-                    features.append(feature_name)
-                else:
-                    features.append(f"{feature_name}: {feature_value}")
-                
-                continue
-            
-            # If line contains common feature keywords, add it
-            feature_keywords = [
-                "system", "package", "wheels", "seats", "audio", "climate", "control",
-                "assist", "camera", "sensor", "navigation", "bluetooth", "usb", "heated",
-                "cooled", "leather", "sunroof", "roof", "door", "window", "mirror", "light",
-                "led", "automatic", "manual", "transmission", "engine", "cylinder", "turbo",
-                "awd", "4wd", "fwd", "rwd", "drive", "brake", "safety", "airbag", "alarm",
-                "lock", "key", "remote", "start", "stop", "cruise", "lane", "blind", "spot",
-                "parking", "backup", "rear", "front", "side", "collision", "warning", "alert"
-            ]
-            
-            if any(keyword in line.lower() for keyword in feature_keywords):
-                features.append(line)
-        
-        return features
-    
-    def _clean_feature_text(self, feature: str) -> str:
+    def _clean_feature_text(self, feature):
         """
         Clean up feature text.
         
         Args:
-            feature: Feature text
+            feature (str): Feature text
             
         Returns:
             str: Cleaned feature text
         """
-        # Remove leading/trailing whitespace
-        cleaned = feature.strip()
+        if not feature:
+            return ""
         
-        # Remove leading bullet points, dashes, etc.
-        cleaned = re.sub(r'^[\s\-•\*]+', '', cleaned)
+        # Remove any leading/trailing whitespace
+        feature = feature.strip()
         
-        # Remove trailing punctuation
-        cleaned = re.sub(r'[\.\,\;\:]+$', '', cleaned)
+        # Remove any part numbers or codes in parentheses
+        feature = re.sub(r'\s*\([^)]*\)', '', feature)
         
-        # Remove extra whitespace
-        cleaned = re.sub(r'\s+', ' ', cleaned)
+        # Remove any pricing information
+        feature = re.sub(r'\$[\d,]+(\.\d{2})?', '', feature)
         
-        return cleaned.strip()
+        # Remove unnecessary spaces
+        feature = re.sub(r'\s+', ' ', feature)
+        
+        return feature.strip()

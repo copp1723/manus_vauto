@@ -1,0 +1,29 @@
+{
+  "browser": {
+    "headless": true,
+    "timeout": 30,
+    "window_size": {
+      "width": 1920,
+      "height": 1080
+    }
+  },
+  "authentication": {
+    "login_url": "https://app.vauto.com/login",
+    "session_timeout_minutes": 60
+  },
+  "inventory": {
+    "max_vehicles": 10,
+    "inventory_url": "https://app.vauto.com/inventory"
+  },
+  "feature_mapping": {
+    "confidence_threshold": 0.8,
+    "similarity_algorithm": "fuzzywuzzy.fuzz.token_sort_ratio"
+  },
+  "reporting": {
+    "email_recipients": [],
+    "report_format": "html",
+    "include_screenshots": true
+  },
+  "debug": false,
+  "log_level": "INFO"
+}
