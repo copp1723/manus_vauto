@@ -1,0 +1,111 @@
+{
+  "Sunroof": [
+    "sunroof",
+    "moonroof",
+    "panoramic roof",
+    "glass roof"
+  ],
+  "Leather Seats": [
+    "leather seats",
+    "leather interior",
+    "leather upholstery"
+  ],
+  "Navigation System": [
+    "navigation system",
+    "nav system",
+    "gps navigation",
+    "built-in navigation"
+  ],
+  "Bluetooth": [
+    "bluetooth",
+    "bluetooth connectivity",
+    "bluetooth audio"
+  ],
+  "Backup Camera": [
+    "backup camera",
+    "rear view camera",
+    "rear camera",
+    "reversing camera"
+  ],
+  "Heated Seats": [
+    "heated seats",
+    "heated front seats",
+    "heated rear seats"
+  ],
+  "Blind Spot Monitor": [
+    "blind spot monitor",
+    "blind spot detection",
+    "blind spot warning"
+  ],
+  "Lane Departure Warning": [
+    "lane departure warning",
+    "lane departure alert",
+    "lane keeping assist"
+  ],
+  "Adaptive Cruise Control": [
+    "adaptive cruise control",
+    "dynamic cruise control",
+    "radar cruise control"
+  ],
+  "Keyless Entry": [
+    "keyless entry",
+    "remote entry",
+    "smart key"
+  ],
+  "Push Button Start": [
+    "push button start",
+    "push start",
+    "keyless start",
+    "remote start"
+  ],
+  "Power Liftgate": [
+    "power liftgate",
+    "power tailgate",
+    "hands-free liftgate"
+  ],
+  "Third Row Seating": [
+    "third row seating",
+    "3rd row seating",
+    "third row seats",
+    "7 passenger seating"
+  ],
+  "All Wheel Drive": [
+    "all wheel drive",
+    "awd",
+    "4wd",
+    "four wheel drive",
+    "4 wheel drive"
+  ],
+  "Apple CarPlay": [
+    "apple carplay",
+    "carplay"
+  ],
+  "Android Auto": [
+    "android auto"
+  ],
+  "Wireless Charging": [
+    "wireless charging",
+    "qi charging",
+    "wireless phone charging"
+  ],
+  "Premium Sound System": [
+    "premium sound",
+    "bose sound",
+    "harman kardon",
+    "jbl sound",
+    "premium audio"
+  ],
+  "Parking Sensors": [
+    "parking sensors",
+    "park assist",
+    "parking assist",
+    "front parking sensors",
+    "rear parking sensors"
+  ],
+  "Collision Warning": [
+    "collision warning",
+    "forward collision warning",
+    "collision alert",
+    "pre-collision system"
+  ]
+}
